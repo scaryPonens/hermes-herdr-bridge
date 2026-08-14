@@ -27,10 +27,13 @@ This repo is the source of truth for both halves: the host `socat` LaunchAgent a
 
 ```bash
 brew install socat
-make install      # render + load the LaunchAgent, install the skill, verify
+make install      # one machine: loopback bridge, skill, verify
 make check        # bridge state, bind scope, host + container reachability, config
+make security-check   # assert the exposure is contained (run by install-tailnet as a gate)
 make uninstall    # remove both
 ```
+
+For herdr and Hermes on *different* machines, see [Two machines, over Tailscale](#two-machines-over-tailscale).
 
 `make help` lists the rest (`restart`, `test`, `logs`, `config`) and the overridable vars — `PORT`, `BIND`, `LABEL`, `SOCKET`, `SKILL_DIR`, `CHECK_IMAGE`, …
 
@@ -42,6 +45,57 @@ make uninstall    # remove both
 | `~/.hermes/skills/autonomous-ai-agents/herdr/` | `skill/` |
 
 The skill is **copied, not symlinked** — Hermes bind-mounts `~/.hermes/skills` into the container, where a symlink pointing back into `~/Workspace` would dangle.
+
+## Two machines, over Tailscale
+
+herdr on one machine, Hermes on another, joined by a tailnet.
+
+On the **herdr** machine:
+
+```bash
+make install-tailnet PEER=100.101.102.103/32     # the Hermes node's tailnet address
+```
+
+That binds socat to this node's own tailnet address — reachable over WireGuard, invisible to the LAN — and puts socat's `range=` source allowlist in front of it. Then it runs `security-check`, and **if that fails it uninstalls the bridge** rather than leaving it exposed.
+
+On the **Hermes** machine, point the container at the herdr node and verify:
+
+```bash
+make check-client HERDR_HOST=100.106.55.42       # the herdr node's tailnet address
+```
+
+Set the same value in `~/.hermes/config.yaml` (`make config HERDR_HOST=100.106.55.42` prints it). Use the IP, not the MagicDNS name: containers usually don't inherit the host's `100.100.100.100` resolver, so the name fails inside the container while the IP works. The Hermes machine needs Tailscale on the *host* — container egress NATs through it.
+
+### What guards this
+
+The bridge has no auth and no TLS of its own. Across machines it gets three independent layers, and `make security-check` is the gate:
+
+| Layer | Enforced by | Verified by security-check |
+|---|---|---|
+| Only tailnet traffic can arrive | binding to the 100.x address | yes — asserts `BIND` is an address Tailscale assigned this node, and rejects `0.0.0.0` |
+| Only one host may connect | socat `range=` | yes — asserts the allowlist is in the *loaded* LaunchAgent, and that it's a real address inside `100.64.0.0/10` |
+| Not published to the internet | no Tailscale Funnel | yes — fails if `funnel status` mentions the port, or if it can't read funnel state at all |
+| Only the Hermes node is permitted | your Tailscale ACL | **no** — an ACL lives on the coordination server, not here |
+
+That last row is why the `range=` allowlist exists: it does not depend on your ACL being right. Set the ACL too — belt and braces:
+
+```json
+{"grants": [
+  {"src": ["tag:hermes"], "dst": ["tag:herdr"], "ip": ["tcp:9876"]}
+]}
+```
+
+Understand what you are permitting: reaching this port means submitting prompts to interactive coding agents with shell and filesystem access on the herdr machine. It is remote code execution by design. Never `tailscale funnel` it.
+
+### Serving both at once
+
+`install-tailnet` replaces the loopback listener, so a Hermes container on the herdr machine itself stops reaching the bridge. To serve both, run a second LaunchAgent on its own label and port — no code change needed, both are vars:
+
+```bash
+make install                                                    # loopback, port 9876
+make install-tailnet PEER=100.101.102.103/32 \
+     LABEL=local.herdr-socat-tailnet PORT=9877
+```
 
 ## The one manual step
 
@@ -67,7 +121,8 @@ and must not bind-mount the herdr socket. `make config` prints this; `make check
 
 ```
 Makefile
-launchd/local.herdr-socat.plist.in    # KeepAlive + RunAtLoad, loopback bind
+bin/security-check.sh                 # the gate: fails closed, explains what it can't verify
+launchd/local.herdr-socat.plist.in    # KeepAlive + RunAtLoad, bind + listener opts
 skill/SKILL.md                        # how Hermes should drive herdr
 skill/scripts/herdr_client.py         # stdlib client: library + CLI
 skill/scripts/test_herdr_client.py    # framing / timeout / error self-check

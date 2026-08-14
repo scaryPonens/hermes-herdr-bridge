@@ -33,6 +33,22 @@ class HerdrError(RuntimeError):
     """herdr was unreachable, slow, incoherent, or refused the request."""
 
 
+def _keepalive(conn):
+    """Keep a long wait alive across a NAT or tailnet relay.
+
+    wait-agent holds one connection for up to 10 minutes with no bytes flowing,
+    which idle timeouts on a cross-machine path will happily reap. macOS socat
+    can't set the interval (no keepidle option there), so the client does it —
+    and the client runs on Linux, where these sockopts exist. Absent ones are
+    skipped rather than raising, so this is a no-op on platforms without them.
+    """
+    conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    for name, value in (("TCP_KEEPIDLE", 60), ("TCP_KEEPINTVL", 10), ("TCP_KEEPCNT", 5)):
+        opt = getattr(socket, name, None)
+        if opt is not None:
+            conn.setsockopt(socket.IPPROTO_TCP, opt, value)
+
+
 def call(method, params=None, timeout=None):
     """Send one request, return its `result`. Raises HerdrError on any failure."""
     timeout = TIMEOUT if timeout is None else timeout
@@ -45,6 +61,7 @@ def call(method, params=None, timeout=None):
         )
     try:
         conn.settimeout(timeout)
+        _keepalive(conn)
         req = {"id": "1", "method": method, "params": params or {}}
         conn.sendall((json.dumps(req) + "\n").encode())
         buf = bytearray()

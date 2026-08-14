@@ -37,6 +37,10 @@ Restart after a change: `make restart`. Verify anytime: `make check`.
 - Confirm the scope any time the bridge is touched: `lsof -nP -iTCP:9876 -sTCP:LISTEN` must show `127.0.0.1:9876`, never `*:9876`.
 - The bridge has no auth. Anything that can open a loopback TCP connection on the host — including any other container — can drive herdr. That is the same trust boundary as the Unix socket's file permissions, minus the file mode; acceptable on a single-user laptop, not on a shared or exposed machine.
 
+## Two machines
+
+herdr and Hermes can live on different machines joined by Tailscale. The only difference that reaches this skill: `HERDR_HOST` is the herdr node's tailnet address (`100.x.y.z`) instead of `host.docker.internal`. The client does not care which. Setup and its security gate are `make install-tailnet` / `make security-check` in the repo.
+
 ## Container config
 
 `~/.hermes/config.yaml` passes the endpoint in as env vars:
@@ -77,5 +81,7 @@ Both should return a `pong` with the herdr version and protocol number.
 | `cannot reach herdr at host.docker.internal:9876` | Bridge not listening | `make restart` in `~/Workspace/hermes-herdr-bridge` on the host |
 | Connects, then `herdr closed the connection` immediately | Bridge is up, herdr server is down — socat accepts TCP before it tries the Unix socket | User starts their herdr session; check `herdr status` on the host |
 | `no response within Ns` | herdr is wedged or the call genuinely takes longer | Raise `HERDR_TIMEOUT`, or use `wait-agent`, which sizes its own socket timeout |
+| Long `wait-agent` dies mid-wait, only across machines | An idle timeout on the path reaped a connection with no traffic for minutes | Already mitigated: the client sets `SO_KEEPALIVE` + a 60s probe interval where the platform supports it. If it persists, shorten the wait and cycle it |
+| Connection refused from one machine but not another | socat's `range=` allowlist excludes that source | On the herdr machine, `make install-tailnet PEER=<that node>/32`, or check your Tailscale ACL |
 | Works from host `nc`, fails from container | Container has no host connectivity, or the runtime lacks `host.docker.internal` | `docker inspect <container>` for network/labels; add `--add-host=host.docker.internal:host-gateway`, or set `HERDR_HOST`. If it resolves but refuses, that runtime cannot see host loopback — `make install BIND=<addr>` |
 | `ConnectionRefusedError: [Errno 111]` on `/run/herdr/herdr.sock` | Someone reintroduced the bind-mount | Remove it; use TCP |

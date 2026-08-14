@@ -50,4 +50,12 @@ expect_error("closed the connection", [b'{"id":"1","result":{}'])  # no newline,
 hc.HOST, hc.PORT = "127.0.0.1", 1  # nothing listening
 expect_error("cannot reach herdr")
 
+# long waits must survive an idle cross-machine path
+s = socket.socket()
+hc._keepalive(s)
+assert s.getsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE)  # macOS reports the flag bit, not 1
+if hasattr(socket, "TCP_KEEPIDLE"):  # Linux; absent on macOS, must not raise
+    assert s.getsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE) == 60
+s.close()
+
 print("ok")

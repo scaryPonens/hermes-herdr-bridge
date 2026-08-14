@@ -9,11 +9,13 @@
 
     <!-- Bridges the herdr Unix socket to TCP so containers can reach it via
          host.docker.internal:@PORT@. Docker Desktop and OrbStack both forward that
-         name to the host loopback, so the default bind=127.0.0.1 stays off the LAN. -->
+         name to the host loopback, so the default bind=127.0.0.1 stays off the LAN.
+         @OPTS@ is empty for that install; the tailnet install fills it with
+         keepalive and a range= source allowlist. -->
     <key>ProgramArguments</key>
     <array>
         <string>@SOCAT@</string>
-        <string>TCP-LISTEN:@PORT@,bind=@BIND@,reuseaddr,fork</string>
+        <string>TCP-LISTEN:@PORT@,bind=@BIND@,reuseaddr,fork@OPTS@</string>
         <string>UNIX-CONNECT:@SOCKET@</string>
     </array>
 
