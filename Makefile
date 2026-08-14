@@ -3,7 +3,8 @@
 #
 # Two installs:
 #   make install                              herdr and Hermes on one machine (loopback)
-#   make install-tailnet PEER=100.x.y.z/32    herdr and Hermes on two, joined by Tailscale
+#   make install-tailnet PEER=100.x.y.z/32    the herdr half, when the two are split
+#   make install-client HERDR_HOST=100.x.y.z  the Hermes half, when the two are split
 #
 # The tailnet install refuses to leave a bridge running that fails `security-check`.
 
@@ -36,12 +37,13 @@ TAILNET_IP := $(shell $(TS) ip -4 2>/dev/null | head -1)
 GUI        := gui/$(shell id -u)
 PING       := {"id":"make","method":"ping","params":{}}
 
-.PHONY: help install install-tailnet uninstall reinstall restart \
-        check check-server check-client security-check test logs config
+.PHONY: help install install-tailnet install-client install-skill uninstall \
+        reinstall restart check check-server check-client security-check test logs config
 
 help:
 	@echo "install          herdr + Hermes on one machine: loopback bridge, skill, verify"
-	@echo "install-tailnet  herdr + Hermes on two machines over Tailscale (PEER=... required)"
+	@echo "install-tailnet  the herdr half on two machines over Tailscale (PEER=... required)"
+	@echo "install-client   the Hermes half: skill only, no bridge (HERDR_HOST=... )"
 	@echo "uninstall        unload + remove the LaunchAgent and the installed skill"
 	@echo "restart          bounce the bridge (launchctl kickstart -k)"
 	@echo "check            check-server + check-client"
@@ -68,12 +70,20 @@ endif
 	@launchctl bootout $(GUI)/$(LABEL) 2>/dev/null || true
 	@launchctl bootstrap $(GUI) $(PLIST)
 	@echo "installed $(PLIST)"
+	@$(MAKE) --no-print-directory install-skill
+	@sleep 1
+	@$(MAKE) --no-print-directory $(POST_CHECK)
+
+# The Hermes half: the skill only. No socat, no LaunchAgent — this machine
+# talks to a bridge running somewhere else.
+install-client: test install-skill
+	@$(MAKE) --no-print-directory check-client
+
+install-skill:
 	@# copy, never symlink: Hermes bind-mounts ~/.hermes/skills into the container,
 	@# where a symlink to $(CURDIR) would dangle.
 	@rm -rf $(SKILL_DIR) && mkdir -p $(SKILL_DIR) && cp -R skill/. $(SKILL_DIR)/
 	@echo "installed $(SKILL_DIR)"
-	@sleep 1
-	@$(MAKE) --no-print-directory $(POST_CHECK)
 
 # Exposes the bridge on this node's tailnet address, with socat's own source
 # allowlist in front of it. Installs nothing that security-check won't pass:

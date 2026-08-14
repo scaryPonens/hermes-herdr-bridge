@@ -48,23 +48,72 @@ The skill is **copied, not symlinked** — Hermes bind-mounts `~/.hermes/skills`
 
 ## Two machines, over Tailscale
 
-herdr on one machine, Hermes on another, joined by a tailnet.
+herdr on one machine (**H**), Hermes on another (**M**), joined by a tailnet. Each machine installs one half; neither installs both.
 
-On the **herdr** machine:
+|  | machine H (herdr) | machine M (Hermes) |
+|---|---|---|
+| runs | herdr, socat LaunchAgent | Hermes + its container runtime |
+| needs | `socat`, Tailscale | Tailscale, Docker |
+| installs | `make install-tailnet` | `make install-client` |
+
+### 0. Both machines: collect the two addresses
+
+Each half is configured with the *other* machine's address, so get both before starting. On each machine:
 
 ```bash
-make install-tailnet PEER=100.101.102.103/32     # the Hermes node's tailnet address
+tailscale ip -4        # App Store build: /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4
 ```
 
-That binds socat to this node's own tailnet address — reachable over WireGuard, invisible to the LAN — and puts socat's `range=` source allowlist in front of it. Then it runs `security-check`, and **if that fails it uninstalls the bridge** rather than leaving it exposed.
+Call them `H_IP` and `M_IP`. Confirm they can see each other: `tailscale ping <other>`.
 
-On the **Hermes** machine, point the container at the herdr node and verify:
+### 1. Machine H — install the bridge
 
 ```bash
-make check-client HERDR_HOST=100.106.55.42       # the herdr node's tailnet address
+git clone https://github.com/scaryPonens/hermes-herdr-bridge && cd hermes-herdr-bridge
+brew install socat
+make install-tailnet PEER=<M_IP>/32
 ```
 
-Set the same value in `~/.hermes/config.yaml` (`make config HERDR_HOST=100.106.55.42` prints it). Use the IP, not the MagicDNS name: containers usually don't inherit the host's `100.100.100.100` resolver, so the name fails inside the container while the IP works. The Hermes machine needs Tailscale on the *host* — container egress NATs through it.
+Binds socat to H's own tailnet address — reachable over WireGuard, invisible to the LAN — with `range=<M_IP>/32` in front of it, so H refuses connections from anywhere else regardless of what your ACL says. Then it runs `security-check`, and **if that fails it uninstalls the bridge** rather than leaving it exposed. herdr must be running on H, or the check fails with `herdr closed the connection`.
+
+### 2. Tailnet — restrict the port
+
+In your Tailscale ACL (see [What guards this](#what-guards-this) for why this is not optional):
+
+```json
+{"grants": [
+  {"src": ["tag:hermes"], "dst": ["tag:herdr"], "ip": ["tcp:9876"]}
+]}
+```
+
+### 3. Machine M — point Hermes at H
+
+Edit `~/.hermes/config.yaml` under `terminal:` — `make config HERDR_HOST=<H_IP>` prints the exact block:
+
+```yaml
+  docker_extra_args:
+    - "-e"
+    - "HERDR_HOST=<H_IP>"
+    - "-e"
+    - "HERDR_PORT=9876"
+```
+
+Use the IP, not the MagicDNS name: containers usually don't inherit the host's `100.100.100.100` resolver, so the name fails inside the container while the IP works.
+
+### 4. Machine M — install the Hermes half and verify
+
+```bash
+git clone https://github.com/scaryPonens/hermes-herdr-bridge && cd hermes-herdr-bridge
+make install-client HERDR_HOST=<H_IP>
+```
+
+Installs the skill only — no socat, no LaunchAgent, nothing listening on M — then runs `check-client`: config assertions plus a real container dialing `<H_IP>:9876` through the tailnet. A green run here means Hermes on M can drive agents on H.
+
+Restart the Hermes session on M so a new container picks up the env vars (`container_persistent: false` means within ~5 minutes anyway).
+
+### Re-verifying later
+
+`make check-server` and `make security-check` on H; `make check-client HERDR_HOST=<H_IP>` on M. `make check` on either machine will fail, because it asserts both halves are local.
 
 ### What guards this
 
