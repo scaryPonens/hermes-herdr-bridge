@@ -62,9 +62,9 @@ The skill is **copied, not symlinked** — Hermes bind-mounts `~/.hermes/skills`
 
 ## Two machines, over Tailscale
 
-herdr on one machine (**H**), Hermes on another (**M**), joined by a tailnet. Each machine installs one half; neither installs both.
+herdr on one machine, Hermes on another, joined by a tailnet. Each machine installs one half; neither installs both. Both names start with H, so this document spells them out rather than abbreviating: the **herdr machine** and the **Hermes machine**, addressed as `HERDR_IP` and `HERMES_IP`.
 
-|  | machine H (herdr) | machine M (Hermes) |
+|  | the herdr machine | the Hermes machine |
 |---|---|---|
 | runs | herdr, socat LaunchAgent | Hermes + its container runtime |
 | needs | `socat`, Tailscale | Tailscale, Docker |
@@ -72,20 +72,20 @@ herdr on one machine (**H**), Hermes on another (**M**), joined by a tailnet. Ea
 
 ```mermaid
 flowchart LR
-  subgraph M["machine M — Hermes"]
-    HC["Hermes container<br/>HERDR_HOST is H_IP"]
+  subgraph HERMES["the Hermes machine"]
+    HC["Hermes container<br/>HERDR_HOST is HERDR_IP"]
   end
-  subgraph H["machine H — herdr"]
+  subgraph HERDR["the herdr machine"]
     ACL["lock 1: Tailscale packet filter<br/>your ACL, enforced here on arrival"]
-    SO["lock 2: socat<br/>bind is H_IP, range is M_IP/32"]
+    SO["lock 2: socat<br/>bind is HERDR_IP, range is HERMES_IP/32"]
     HD["herdr and its agent panes"]
     ACL --> SO
     SO -->|"Unix domain socket"| HD
   end
-  HC -->|"TCP to H_IP:9876, over WireGuard"| ACL
+  HC -->|"TCP to HERDR_IP:9876, over WireGuard"| ACL
 ```
 
-Both locks live on H and are set independently: the ACL on Tailscale's coordination server, the `range=` allowlist in H's own LaunchAgent. Each half is configured with the **other** machine's address — M dials `H_IP`, H allows only `M_IP`. That mutual dependency is why step 0 is collecting both.
+Both locks live on the herdr machine and are set independently: the ACL on Tailscale's coordination server, the `range=` allowlist in that machine's own LaunchAgent. Each half is configured with the **other** machine's address — Hermes dials `HERDR_IP`, herdr admits only `HERMES_IP`. That mutual dependency is why step 0 is collecting both.
 
 ### 0. Both machines: collect the two addresses
 
@@ -95,17 +95,17 @@ Each half is configured with the *other* machine's address, so get both before s
 tailscale ip -4        # App Store build: /Applications/Tailscale.app/Contents/MacOS/Tailscale ip -4
 ```
 
-Call them `H_IP` and `M_IP`. Confirm they can see each other: `tailscale ping <other>`.
+Call them `HERDR_IP` and `HERMES_IP`. Confirm they can see each other: `tailscale ping <other>`.
 
 ### 1. Machine H — install the bridge
 
 ```bash
 git clone https://github.com/scaryPonens/hermes-herdr-bridge && cd hermes-herdr-bridge
 brew install socat
-make install-tailnet PEER=<M_IP>/32
+make install-tailnet PEER=<HERMES_IP>/32
 ```
 
-Binds socat to H's own tailnet address — reachable over WireGuard, invisible to the LAN — with `range=<M_IP>/32` in front of it, so H refuses connections from anywhere else regardless of what your ACL says. Then it runs `security-check`, and **if that fails it uninstalls the bridge** rather than leaving it exposed. herdr must be running on H, or the check fails with `herdr closed the connection`.
+Binds socat to the herdr machine's own tailnet address — reachable over WireGuard, invisible to the LAN — with `range=<HERMES_IP>/32` in front of it, so it refuses connections from anywhere else regardless of what your ACL says. Then it runs `security-check`, and **if that fails it uninstalls the bridge** rather than leaving it exposed. herdr must be running there, or the check fails with `herdr closed the connection`.
 
 ### 2. Tailnet — restrict the port
 
@@ -119,12 +119,12 @@ In your Tailscale ACL (see [What guards this](#what-guards-this) for why this is
 
 ### 3. Machine M — point Hermes at H
 
-Edit `~/.hermes/config.yaml` under `terminal:` — `make config HERDR_HOST=<H_IP>` prints the exact block:
+Edit `~/.hermes/config.yaml` under `terminal:` — `make config HERDR_HOST=<HERDR_IP>` prints the exact block:
 
 ```yaml
   docker_extra_args:
     - "-e"
-    - "HERDR_HOST=<H_IP>"
+    - "HERDR_HOST=<HERDR_IP>"
     - "-e"
     - "HERDR_PORT=9876"
 ```
@@ -135,16 +135,16 @@ Use the IP, not the MagicDNS name: containers usually don't inherit the host's `
 
 ```bash
 git clone https://github.com/scaryPonens/hermes-herdr-bridge && cd hermes-herdr-bridge
-make install-client HERDR_HOST=<H_IP>
+make install-client HERDR_HOST=<HERDR_IP>
 ```
 
-Installs the skill only — no socat, no LaunchAgent, nothing listening on M — then runs `check-client`: config assertions plus a real container dialing `<H_IP>:9876` through the tailnet. A green run here means Hermes on M can drive agents on H.
+Installs the skill only — no socat, no LaunchAgent, nothing listening on the Hermes machine — then runs `check-client`: config assertions plus a real container dialing `<HERDR_IP>:9876` through the tailnet. A green run here means Hermes can drive the agents on the herdr machine.
 
-Restart the Hermes session on M so a new container picks up the env vars (`container_persistent: false` means within ~5 minutes anyway).
+Restart the Hermes session so a new container picks up the env vars (`container_persistent: false` means within ~5 minutes anyway).
 
 ### Re-verifying later
 
-`make check-server` and `make security-check` on H; `make check-client HERDR_HOST=<H_IP>` on M. `make check` on either machine will fail, because it asserts both halves are local.
+`make check-server` and `make security-check` on the herdr machine; `make check-client HERDR_HOST=<HERDR_IP>` on the Hermes machine. `make check` on either machine will fail, because it asserts both halves are local.
 
 ### What guards this
 
@@ -152,9 +152,9 @@ Restart the Hermes session on M so a new container picks up the env vars (`conta
 
 ```mermaid
 flowchart TD
-  A["make install-tailnet PEER=M_IP/32"] --> B{"PEER given, and this<br/>node has a tailnet address?"}
+  A["make install-tailnet PEER=HERMES_IP/32"] --> B{"PEER given, and this<br/>node has a tailnet address?"}
   B -->|"no"| X["refuse<br/>nothing installed, nothing changed"]
-  B -->|"yes"| C["render plist with bind=H_IP and range=PEER<br/>load LaunchAgent, install skill"]
+  B -->|"yes"| C["render plist with bind=HERDR_IP and range=PEER<br/>load LaunchAgent, install skill"]
   C --> D["check-server<br/>agent loaded, herdr answers"]
   D --> E{"security-check"}
   E -->|"PASS"| F["bridge stays up"]
