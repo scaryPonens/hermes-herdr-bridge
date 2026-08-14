@@ -2,7 +2,7 @@
 
 ## Why a bridge
 
-herdr listens on a macOS Unix domain socket (`~/.config/herdr/herdr.sock`). Hermes runs in a Linux container under OrbStack. Bind-mounting the socket **does not work**: the file appears inside the container, but `socket.AF_UNIX` connects fail with `ConnectionRefusedError: [Errno 111]` — a macOS Unix socket has no meaning inside the Linux VM. Only TCP crosses that boundary.
+herdr listens on a macOS Unix domain socket (`~/.config/herdr/herdr.sock`). Hermes runs in a Linux container — under Docker Desktop or OrbStack, that means a Linux VM. Bind-mounting the socket **does not work**: the file appears inside the container, but `socket.AF_UNIX` connects fail with `ConnectionRefusedError: [Errno 111]` — a macOS Unix socket has no meaning inside the VM. Only TCP crosses that boundary. (On native Linux there is no VM and no need for any of this — mount the socket.)
 
 ```
 Hermes container → host.docker.internal:9876 → socat (macOS) → herdr.sock → herdr
@@ -33,7 +33,7 @@ Restart after a change: `make restart`. Verify anytime: `make check`.
 
 ## Security
 
-- **`bind=127.0.0.1`, not `0.0.0.0`.** Verified: OrbStack containers reach a host loopback listener through `host.docker.internal`, so binding to all interfaces buys nothing and would expose herdr — full control of the user's local coding agents — to every device on the LAN. Do not "fix" a connection problem by widening the bind.
+- **`bind=127.0.0.1`, not `0.0.0.0`.** Containers under Docker Desktop and OrbStack reach a host loopback listener through `host.docker.internal` (verified on OrbStack), so binding to all interfaces buys nothing and would expose herdr — full control of the user's local coding agents — to every device on the LAN. Do not "fix" a connection problem by widening the bind: try `--add-host=host.docker.internal:host-gateway` or a different `HERDR_HOST` first. The repo's `BIND` var exists for runtimes that provably cannot reach loopback, and `make check` warns whenever the listener is not loopback-only.
 - Confirm the scope any time the bridge is touched: `lsof -nP -iTCP:9876 -sTCP:LISTEN` must show `127.0.0.1:9876`, never `*:9876`.
 - The bridge has no auth. Anything that can open a loopback TCP connection on the host — including any other container — can drive herdr. That is the same trust boundary as the Unix socket's file permissions, minus the file mode; acceptable on a single-user laptop, not on a shared or exposed machine.
 
@@ -77,5 +77,5 @@ Both should return a `pong` with the herdr version and protocol number.
 | `cannot reach herdr at host.docker.internal:9876` | Bridge not listening | `make restart` in `~/Workspace/hermes-herdr-bridge` on the host |
 | Connects, then `herdr closed the connection` immediately | Bridge is up, herdr server is down — socat accepts TCP before it tries the Unix socket | User starts their herdr session; check `herdr status` on the host |
 | `no response within Ns` | herdr is wedged or the call genuinely takes longer | Raise `HERDR_TIMEOUT`, or use `wait-agent`, which sizes its own socket timeout |
-| Works from host `nc`, fails from container | Container has no host connectivity (egress profile, custom network) | Check `docker inspect <container>` labels/network; `host.docker.internal` must resolve |
+| Works from host `nc`, fails from container | Container has no host connectivity, or the runtime lacks `host.docker.internal` | `docker inspect <container>` for network/labels; add `--add-host=host.docker.internal:host-gateway`, or set `HERDR_HOST`. If it resolves but refuses, that runtime cannot see host loopback — `make install BIND=<addr>` |
 | `ConnectionRefusedError: [Errno 111]` on `/run/herdr/herdr.sock` | Someone reintroduced the bind-mount | Remove it; use TCP |

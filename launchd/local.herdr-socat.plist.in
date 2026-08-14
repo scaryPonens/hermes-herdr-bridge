@@ -7,13 +7,13 @@
     <key>Label</key>
     <string>@LABEL@</string>
 
-    <!-- Bridges the herdr Unix socket to TCP so containers (OrbStack) can reach it
-         via host.docker.internal:@PORT@. bind=127.0.0.1 keeps it off the LAN; OrbStack
-         still forwards host.docker.internal to the host loopback. -->
+    <!-- Bridges the herdr Unix socket to TCP so containers can reach it via
+         host.docker.internal:@PORT@. Docker Desktop and OrbStack both forward that
+         name to the host loopback, so the default bind=127.0.0.1 stays off the LAN. -->
     <key>ProgramArguments</key>
     <array>
         <string>@SOCAT@</string>
-        <string>TCP-LISTEN:@PORT@,bind=127.0.0.1,reuseaddr,fork</string>
+        <string>TCP-LISTEN:@PORT@,bind=@BIND@,reuseaddr,fork</string>
         <string>UNIX-CONNECT:@SOCKET@</string>
     </array>
 

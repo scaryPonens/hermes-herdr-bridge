@@ -2,6 +2,11 @@
 # Everything here is per-user; nothing needs sudo.
 
 PORT          ?= 9876
+# Loopback is enough for Docker Desktop and OrbStack: both reach a host
+# 127.0.0.1 listener through host.docker.internal. Widening BIND hands herdr —
+# full control of your local coding agents — to every device that can route
+# here. Change it only for a runtime that provably cannot reach loopback.
+BIND          ?= 127.0.0.1
 LABEL         ?= local.herdr-socat
 SOCKET        ?= $(HOME)/.config/herdr/herdr.sock
 PLIST         ?= $(HOME)/Library/LaunchAgents/$(LABEL).plist
@@ -24,6 +29,9 @@ help:
 	@echo "test       run the herdr client self-check"
 	@echo "logs       tail the socat log"
 	@echo "config     print the ~/.hermes/config.yaml snippet this integration needs"
+	@echo
+	@echo "Vars: PORT BIND LABEL SOCKET PLIST LOG SKILL_DIR HERMES_CONFIG CHECK_IMAGE"
+	@echo "BIND defaults to 127.0.0.1 — read the note in the Makefile before changing it."
 
 install: test
 ifeq ($(SOCAT),)
@@ -31,7 +39,7 @@ ifeq ($(SOCAT),)
 endif
 	@mkdir -p $(dir $(PLIST)) $(dir $(LOG)) $(SKILL_DIR)
 	@sed -e 's|@LABEL@|$(LABEL)|g' -e 's|@SOCAT@|$(SOCAT)|g' -e 's|@PORT@|$(PORT)|g' \
-	     -e 's|@SOCKET@|$(SOCKET)|g' -e 's|@LOG@|$(LOG)|g' \
+	     -e 's|@BIND@|$(BIND)|g' -e 's|@SOCKET@|$(SOCKET)|g' -e 's|@LOG@|$(LOG)|g' \
 	     launchd/local.herdr-socat.plist.in > $(PLIST)
 	@launchctl bootout $(GUI)/$(LABEL) 2>/dev/null || true
 	@launchctl bootstrap $(GUI) $(PLIST)
@@ -62,18 +70,31 @@ check:
 	@echo "== LaunchAgent"
 	@launchctl print $(GUI)/$(LABEL) 2>/dev/null | grep -E '^\t(state|pid) =' \
 	  || { echo "  NOT LOADED — run: make install"; exit 1; }
-	@echo "== bind scope (must be 127.0.0.1, never *)"
+	@echo "== bind scope"
 	@lsof -nP -iTCP:$(PORT) -sTCP:LISTEN | awk 'NR>1 {print "  " $$9}' \
 	  || { echo "  nothing listening on $(PORT)"; exit 1; }
+	@if ! lsof -nP -iTCP:$(PORT) -sTCP:LISTEN | grep -q '127.0.0.1:$(PORT)'; then \
+	  echo "  !! NOT loopback-only (BIND=$(BIND))."; \
+	  echo "  !! The bridge has no auth and herdr controls your local coding agents,"; \
+	  echo "  !! so anything that can route here can drive them."; \
+	fi
 	@echo "== herdr, from the host"
 	@printf '$(PING)\n' | nc 127.0.0.1 $(PORT) | head -c 120 | sed 's/^/  /'; echo
 	@echo "== herdr, from a container (real client, real skills mount)"
-	@if command -v docker >/dev/null; then \
-	  docker run --rm -e HERDR_HOST=host.docker.internal -e HERDR_PORT=$(PORT) \
+	@if ! command -v docker >/dev/null; then echo "  skipped (no docker)"; \
+	elif out=$$(docker run --rm -e HERDR_HOST=host.docker.internal -e HERDR_PORT=$(PORT) \
 	    -v $(HOME)/.hermes/skills:/root/.hermes/skills:ro $(CHECK_IMAGE) \
-	    python3 /root/.hermes/skills/autonomous-ai-agents/herdr/scripts/herdr_client.py health \
-	    | cut -c1-120 | sed 's/^/  /'; \
-	else echo "  skipped (no docker)"; fi
+	    python3 /root/.hermes/skills/autonomous-ai-agents/herdr/scripts/herdr_client.py health 2>&1); then \
+	  echo "$$out" | cut -c1-120 | sed 's/^/  /'; \
+	else \
+	  echo "$$out" | cut -c1-160 | sed 's/^/  /'; \
+	  echo "  This runtime cannot reach the bridge. Two knobs, in order:"; \
+	  echo "    1. host.docker.internal missing? run containers with"; \
+	  echo "       --add-host=host.docker.internal:host-gateway, or set HERDR_HOST to a reachable IP."; \
+	  echo "    2. resolves but refuses? the VM cannot see host loopback — make install BIND=<addr>"; \
+	  echo "       with the narrowest address that runtime can reach. Never 0.0.0.0 on an untrusted network."; \
+	  exit 1; \
+	fi
 	@echo "== Hermes config"
 	@grep -q 'HERDR_HOST=host.docker.internal' $(HERMES_CONFIG) \
 	  && echo "  HERDR_HOST/HERDR_PORT present" \
