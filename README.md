@@ -4,9 +4,23 @@ Lets a Hermes agent running in a container drive [herdr](https://herdr.dev)-mana
 
 herdr listens on a Unix domain socket. Hermes runs in a Linux container, which on macOS means a Linux VM (Docker Desktop, OrbStack). Bind-mounting the socket does not work — the file shows up inside the container but connecting fails with `ConnectionRefusedError: [Errno 111]`, because a macOS Unix socket means nothing inside the VM. Only TCP crosses that boundary.
 
+```mermaid
+flowchart LR
+  subgraph vm["Linux VM: Docker Desktop or OrbStack"]
+    HC["Hermes container<br/>herdr_client.py"]
+  end
+  subgraph mac["macOS host"]
+    SO["socat<br/>bind=127.0.0.1:9876"]
+    SK["~/.config/herdr/herdr.sock"]
+    HD["herdr"]
+    AG["Claude Code, Codex, other panes"]
+  end
+  HC -->|"TCP to host.docker.internal:9876"| SO
+  SO -->|"Unix domain socket"| SK
+  SK --> HD --> AG
 ```
-Hermes container → host.docker.internal:9876 → socat (macOS) → ~/.config/herdr/herdr.sock → herdr
-```
+
+The box boundary is the whole problem: herdr's socket lives in the macOS box, and nothing in the VM box can open it. TCP is the only thing that crosses.
 
 ## Runtime support
 
@@ -55,6 +69,23 @@ herdr on one machine (**H**), Hermes on another (**M**), joined by a tailnet. Ea
 | runs | herdr, socat LaunchAgent | Hermes + its container runtime |
 | needs | `socat`, Tailscale | Tailscale, Docker |
 | installs | `make install-tailnet` | `make install-client` |
+
+```mermaid
+flowchart LR
+  subgraph M["machine M — Hermes"]
+    HC["Hermes container<br/>HERDR_HOST is H_IP"]
+  end
+  subgraph H["machine H — herdr"]
+    ACL["lock 1: Tailscale packet filter<br/>your ACL, enforced here on arrival"]
+    SO["lock 2: socat<br/>bind is H_IP, range is M_IP/32"]
+    HD["herdr and its agent panes"]
+    ACL --> SO
+    SO -->|"Unix domain socket"| HD
+  end
+  HC -->|"TCP to H_IP:9876, over WireGuard"| ACL
+```
+
+Both locks live on H and are set independently: the ACL on Tailscale's coordination server, the `range=` allowlist in H's own LaunchAgent. Each half is configured with the **other** machine's address — M dials `H_IP`, H allows only `M_IP`. That mutual dependency is why step 0 is collecting both.
 
 ### 0. Both machines: collect the two addresses
 
@@ -116,6 +147,19 @@ Restart the Hermes session on M so a new container picks up the env vars (`conta
 `make check-server` and `make security-check` on H; `make check-client HERDR_HOST=<H_IP>` on M. `make check` on either machine will fail, because it asserts both halves are local.
 
 ### What guards this
+
+`install-tailnet` will not leave a bridge running that fails its own check:
+
+```mermaid
+flowchart TD
+  A["make install-tailnet PEER=M_IP/32"] --> B{"PEER given, and this<br/>node has a tailnet address?"}
+  B -->|"no"| X["refuse<br/>nothing installed, nothing changed"]
+  B -->|"yes"| C["render plist with bind=H_IP and range=PEER<br/>load LaunchAgent, install skill"]
+  C --> D["check-server<br/>agent loaded, herdr answers"]
+  D --> E{"security-check"}
+  E -->|"PASS"| F["bridge stays up"]
+  E -->|"FAIL"| G["make uninstall<br/>bridge removed, exit 1"]
+```
 
 The bridge has no auth and no TLS of its own. Across machines it gets three independent layers, and `make security-check` is the gate:
 
